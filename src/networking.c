@@ -97,6 +97,10 @@ void linkClient(client *c) {
     raxInsert(server.clients_index,(unsigned char*)&id,sizeof(id),c,NULL);
 }
 
+/*
+ * 根据connection创建客户端
+ * 病设置readHandler
+ * */
 client *createClient(connection *conn) {
     client *c = zmalloc(sizeof(client));
 
@@ -104,12 +108,17 @@ client *createClient(connection *conn) {
      * This is useful since all the commands needs to be executed
      * in the context of a client. When commands are executed in other
      * contexts (for instance a Lua script) we need a non connected client. */
-    if (conn) {
+    if (conn) {//如果存在链接
+        //设置非阻塞
         connNonBlock(conn);
+        //设置tcp no delay
         connEnableTcpNoDelay(conn);
+        //如果设置了keepalive
         if (server.tcpkeepalive)
             connKeepAlive(conn,server.tcpkeepalive);
+        //设置读的handler
         connSetReadHandler(conn, readQueryFromClient);
+        //设置data
         connSetPrivateData(conn, c);
     }
 
@@ -945,6 +954,7 @@ static void acceptCommonHandler(connection *conn, int flags, char *ip) {
      * Admission control will happen before a client is created and connAccept()
      * called, because we don't want to even start transport-level negotiation
      * if rejected. */
+    //如果超过最大的限制
     if (listLength(server.clients) + getClusterConnectionsCount()
         >= server.maxclients)
     {
@@ -958,6 +968,7 @@ static void acceptCommonHandler(connection *conn, int flags, char *ip) {
         /* That's a best effort error message, don't check write errors.
          * Note that for TLS connections, no handshake was done yet so nothing
          * is written and the connection will just drop. */
+        //返回最大连接数错误
         if (connWrite(conn,err,strlen(err)) == -1) {
             /* Nothing to do, Just to avoid the warning... */
         }
@@ -967,6 +978,7 @@ static void acceptCommonHandler(connection *conn, int flags, char *ip) {
     }
 
     /* Create connection and client */
+    //根据链接创建client
     if ((c = createClient(conn)) == NULL) {
         serverLog(LL_WARNING,
             "Error registering fd event for the new client: %s (conn: %s)",
@@ -987,6 +999,7 @@ static void acceptCommonHandler(connection *conn, int flags, char *ip) {
      *
      * Because of that, we must do nothing else afterwards.
      */
+    //和客户端进行accept
     if (connAccept(conn, clientAcceptHandler) == C_ERR) {
         char conninfo[100];
         if (connGetState(conn) == CONN_STATE_ERROR)
@@ -1014,6 +1027,7 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         }
         serverLog(LL_VERBOSE,"Accepted %s:%d", cip, cport);
+        //创建connection
         acceptCommonHandler(connCreateAcceptedSocket(cfd),0,cip);
     }
 }
@@ -1960,6 +1974,7 @@ void readQueryFromClient(connection *conn) {
 
     /* Check if we want to read from the client later when exiting from
      * the event loop. This is the case if threaded I/O is enabled. */
+    //如果我们 开启了读多线程，则会将其加入到队列
     if (postponeClientRead(c)) return;
 
     /* Update total number of reads on server */
@@ -2023,6 +2038,7 @@ void readQueryFromClient(connection *conn) {
 
     /* There is more data in the client input buffer, continue parsing it
      * in case to check if there is a full command to execute. */
+    //处理请求
      processInputBuffer(c);
 }
 
@@ -3001,20 +3017,28 @@ void *IOThreadMain(void *myid) {
     long id = (unsigned long)myid;
     char thdname[16];
 
+    //构建thread的名称
     snprintf(thdname, sizeof(thdname), "io_thd_%ld", id);
     redis_set_thread_title(thdname);
+    //设置cpu 亲和性 那io线程绑定在逻辑cpu上面
+    //这样的话能提升最大cpu使用效率，亲和性处理，redis.conf可以自行配置。
     redisSetCpuAffinity(server.server_cpulist);
+    //设置线程是可以被杀死 的
     makeThreadKillable();
 
     while(1) {
         /* Wait for start */
+        //等待开始，如果1000000都没有到往下走
         for (int j = 0; j < 1000000; j++) {
+            //等待线程被开启
             if (io_threads_pending[id] != 0) break;
         }
 
         /* Give the main thread a chance to stop this thread. */
         if (io_threads_pending[id] == 0) {
+            //可以看到前面初始化有调用lock，所以在没有调用startThreadIo 这个方法之前，会在这里给锁住，当有更多写任务的时候就会调用startThreadIo来开启这里
             pthread_mutex_lock(&io_threads_mutex[id]);
+            //至于这里为什么unlock 也很简单，这个不是叠加锁，即unlock一次就会把锁全部解放掉，放在这里就是为了防止stopThreadIo()方法里面的锁形成一个死锁，导致卡死主线程。
             pthread_mutex_unlock(&io_threads_mutex[id]);
             continue;
         }
@@ -3027,17 +3051,24 @@ void *IOThreadMain(void *myid) {
          * before we drop the pending count to 0. */
         listIter li;
         listNode *ln;
+        //获取等待的列表
         listRewind(io_threads_list[id],&li);
+        //遍历
         while((ln = listNext(&li))) {
+            //获取client
             client *c = listNodeValue(ln);
+            //当前是什么请求
             if (io_threads_op == IO_THREADS_OP_WRITE) {
+                //写事件返回数据到客户端
                 writeToClient(c,0);
             } else if (io_threads_op == IO_THREADS_OP_READ) {
+                //读取客户端数据到querybuffer 里面
                 readQueryFromClient(c->conn);
             } else {
                 serverPanic("io_threads_op value is unknown");
             }
         }
+        //清空列表
         listEmpty(io_threads_list[id]);
         io_threads_pending[id] = 0;
 
@@ -3045,12 +3076,16 @@ void *IOThreadMain(void *myid) {
     }
 }
 
-/* Initialize the data structures needed for threaded I/O. */
+/* Initialize the data structures needed for threaded I/O.
+ * 初始化线程io
+ * */
 void initThreadedIO(void) {
     server.io_threads_active = 0; /* We start with threads not active. */
 
     /* Don't spawn any thread if the user selected a single thread:
      * we'll handle I/O directly from the main thread. */
+
+     //如果只有一个线程则继续使用现在的主线程
     if (server.io_threads_num == 1) return;
 
     if (server.io_threads_num > IO_THREADS_MAX_NUM) {
@@ -3062,14 +3097,28 @@ void initThreadedIO(void) {
     /* Spawn and initialize the I/O threads. */
     for (int i = 0; i < server.io_threads_num; i++) {
         /* Things we do for all the threads including the main thread. */
+        //位每一个线层创建一个列表
         io_threads_list[i] = listCreate();
+        //第一个线程认为是 主线程
         if (i == 0) continue; /* Thread 0 is the main thread. */
 
         /* Things we do only for the additional threads. */
         pthread_t tid;
+        //调用C语言的能力
+        //pthread_mutex_init() 函数是以动态方式创建互斥锁的，参数attr指定了新建互斥锁的属性。如果参数attr为空(NULL)，
+        // 则使用默认的互斥锁属性，默认属性为快速互斥锁 。互斥锁的属性在创建锁的时候指定，在LinuxThreads实现中仅有一个锁类型属性，
+        // 不同的锁类型在试图对一个已经被锁定的互斥锁加锁时表现不同。
+        //pthread_mutexattr_init() 函数成功完成之后会返回零，其他任何返回值都表示出现了错误。
         pthread_mutex_init(&io_threads_mutex[i],NULL);
+        //设置等待的数量为0
         io_threads_pending[i] = 0;
+        //获取锁
         pthread_mutex_lock(&io_threads_mutex[i]); /* Thread will be stopped. */
+        //创建线程
+        //tid 线程标识符指针
+        //第二个参数默认属性
+        //第三个参数 处理的函数
+        //第四个参数
         if (pthread_create(&tid,NULL,IOThreadMain,(void*)(long)i) != 0) {
             serverLog(LL_WARNING,"Fatal: Can't initialize IO thread.");
             exit(1);
@@ -3099,6 +3148,7 @@ void startThreadedIO(void) {
     if (tio_debug) { printf("S"); fflush(stdout); }
     if (tio_debug) printf("--- STARTING THREADED IO ---\n");
     serverAssert(server.io_threads_active == 0);
+    //释放锁
     for (int j = 1; j < server.io_threads_num; j++)
         pthread_mutex_unlock(&io_threads_mutex[j]);
     server.io_threads_active = 1;
@@ -3113,6 +3163,7 @@ void stopThreadedIO(void) {
         (int) listLength(server.clients_pending_read),
         (int) listLength(server.clients_pending_write));
     serverAssert(server.io_threads_active == 1);
+    //给每个客户端加上锁，标识停止
     for (int j = 1; j < server.io_threads_num; j++)
         pthread_mutex_lock(&io_threads_mutex[j]);
     server.io_threads_active = 0;
@@ -3133,6 +3184,7 @@ int stopThreadedIOIfNeeded(void) {
     /* Return ASAP if IO threads are disabled (single threaded mode). */
     if (server.io_threads_num == 1) return 1;
 
+    //如果小于设置线程数量的2倍，则停止
     if (pending < (server.io_threads_num*2)) {
         if (server.io_threads_active) stopThreadedIO();
         return 1;
@@ -3146,12 +3198,15 @@ int handleClientsWithPendingWritesUsingThreads(void) {
     if (processed == 0) return 0; /* Return ASAP if there are no clients. */
 
     /* If I/O threads are disabled or we have few clients to serve, don't
-     * use I/O threads, but thejboring synchronous code. */
+     * use I/O threads, but thejboring synchronous code.
+     * 如果没有开启多线程
+     * */
     if (server.io_threads_num == 1 || stopThreadedIOIfNeeded()) {
         return handleClientsWithPendingWrites();
     }
 
     /* Start threads if needed. */
+    //否则激活多线程
     if (!server.io_threads_active) startThreadedIO();
 
     if (tio_debug) printf("%d TOTAL WRITE pending clients\n", processed);
@@ -3249,7 +3304,10 @@ int postponeClientRead(client *c) {
  * the reads in the buffers, and also parse the first command available
  * rendering it in the client structures. */
 int handleClientsWithPendingReadsUsingThreads(void) {
+    //如果没有io_threads_do_reads且io_threads_active，直接返回
     if (!server.io_threads_active || !server.io_threads_do_reads) return 0;
+    //如果没有等待的，则返回
+    //这个会在readQueryFromClient方法中被添加
     int processed = listLength(server.clients_pending_read);
     if (processed == 0) return 0;
 
@@ -3260,9 +3318,11 @@ int handleClientsWithPendingReadsUsingThreads(void) {
     listNode *ln;
     listRewind(server.clients_pending_read,&li);
     int item_id = 0;
+    //遍历等待的链表
     while((ln = listNext(&li))) {
         client *c = listNodeValue(ln);
         int target_id = item_id % server.io_threads_num;
+        //将其分发到对应的thread的位置
         listAddNodeTail(io_threads_list[target_id],c);
         item_id++;
     }
@@ -3276,6 +3336,7 @@ int handleClientsWithPendingReadsUsingThreads(void) {
     }
 
     /* Also use the main thread to process a slice of clients. */
+    //主线程也会处理一些客户端连接请求
     listRewind(io_threads_list[0],&li);
     while((ln = listNext(&li))) {
         client *c = listNodeValue(ln);
@@ -3284,6 +3345,7 @@ int handleClientsWithPendingReadsUsingThreads(void) {
     listEmpty(io_threads_list[0]);
 
     /* Wait for all the other threads to end their work. */
+    //等待所有的子线程完成
     while(1) {
         unsigned long pending = 0;
         for (int j = 1; j < server.io_threads_num; j++)
