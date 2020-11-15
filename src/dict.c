@@ -186,7 +186,9 @@ int dictExpand(dict *d, unsigned long size)
  * will visit at max N*10 empty buckets in total, otherwise the amount of
  * work it does would be unbound and the function may block for a long time. */
 int dictRehash(dict *d, int n) {
+    //空的数量
     int empty_visits = n*10; /* Max number of empty buckets to visit. */
+    //是否在进行rehash
     if (!dictIsRehashing(d)) return 0;
 
     while(n-- && d->ht[0].used != 0) {
@@ -195,8 +197,10 @@ int dictRehash(dict *d, int n) {
         /* Note that rehashidx can't overflow as we are sure there are more
          * elements because ht[0].used != 0 */
         assert(d->ht[0].size > (unsigned long)d->rehashidx);
+        //如果rehash的数据为空
         while(d->ht[0].table[d->rehashidx] == NULL) {
             d->rehashidx++;
+            //数据-1
             if (--empty_visits == 0) return 1;
         }
         de = d->ht[0].table[d->rehashidx];
@@ -206,6 +210,7 @@ int dictRehash(dict *d, int n) {
 
             nextde = de->next;
             /* Get the index in the new hash table */
+            //找到对应的位置
             h = dictHashKey(d, de->key) & d->ht[1].sizemask;
             de->next = d->ht[1].table[h];
             d->ht[1].table[h] = de;
@@ -213,6 +218,7 @@ int dictRehash(dict *d, int n) {
             d->ht[1].used++;
             de = nextde;
         }
+        //把ht[0]位置设置为0
         d->ht[0].table[d->rehashidx] = NULL;
         d->rehashidx++;
     }
@@ -240,6 +246,7 @@ long long timeInMilliseconds(void) {
 /* Rehash in ms+"delta" milliseconds. The value of "delta" is larger 
  * than 0, and is smaller than 1 in most cases. The exact upper bound 
  * depends on the running time of dictRehash(d,100).*/
+//rehash的调度任务
 int dictRehashMilliseconds(dict *d, int ms) {
     long long start = timeInMilliseconds();
     int rehashes = 0;
@@ -296,7 +303,7 @@ dictEntry *dictAddRaw(dict *d, void *key, dictEntry **existing)
     long index;
     dictEntry *entry;
     dictht *ht;
-
+    //是否正在进行rehash
     if (dictIsRehashing(d)) _dictRehashStep(d);
 
     /* Get the index of the new element, or -1 if
@@ -951,6 +958,11 @@ unsigned long dictScan(dict *d,
 
 /* ------------------------- private functions ------------------------------ */
 
+/**
+ * 是否需要扩展
+ * @param d
+ * @return
+ */
 /* Expand the hash table if needed */
 static int _dictExpandIfNeeded(dict *d)
 {
@@ -964,6 +976,8 @@ static int _dictExpandIfNeeded(dict *d)
      * table (global setting) or we should avoid it but the ratio between
      * elements/buckets is over the "safe" threshold, we resize doubling
      * the number of buckets. */
+    //如果超过了字典的大小
+    //已使用节点数和字典大小之间的比率超过 dict_force_resize_ratio
     if (d->ht[0].used >= d->ht[0].size &&
         (dict_can_resize ||
          d->ht[0].used/d->ht[0].size > dict_force_resize_ratio))

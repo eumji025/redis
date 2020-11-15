@@ -875,6 +875,7 @@ int clientHasPendingReplies(client *c) {
 }
 
 void clientAcceptHandler(connection *conn) {
+    //获取data
     client *c = connGetPrivateData(conn);
 
     if (connGetState(conn) != CONN_STATE_CONNECTED) {
@@ -935,6 +936,7 @@ void clientAcceptHandler(connection *conn) {
 }
 
 #define MAX_ACCEPTS_PER_CALL 1000
+//
 static void acceptCommonHandler(connection *conn, int flags, char *ip) {
     client *c;
     char conninfo[100];
@@ -1600,6 +1602,7 @@ int processInlineBuffer(client *c) {
     /* Newline from slaves can be used to refresh the last ACK time.
      * This is useful for a slave to ping back while loading a big
      * RDB file. */
+    //获取
     if (querylen == 0 && getClientType(c) == CLIENT_TYPE_SLAVE)
         c->repl_ack_time = server.unixtime;
 
@@ -1919,6 +1922,7 @@ void processInputBuffer(client *c) {
         }
 
         if (c->reqtype == PROTO_REQ_INLINE) {
+            //单行
             if (processInlineBuffer(c) != C_OK) break;
             /* If the Gopher mode and we got zero or one argument, process
              * the request in Gopher mode. To avoid data race, Redis won't
@@ -1933,6 +1937,7 @@ void processInputBuffer(client *c) {
                 break;
             }
         } else if (c->reqtype == PROTO_REQ_MULTIBULK) {
+            //多行
             if (processMultibulkBuffer(c) != C_OK) break;
         } else {
             serverPanic("Unknown request type");
@@ -1951,6 +1956,7 @@ void processInputBuffer(client *c) {
             }
 
             /* We are finally ready to execute the command. */
+            //处理客户端请求bin重置客户端
             if (processCommandAndResetClient(c) == C_ERR) {
                 /* If the client is no longer valid, we avoid exiting this
                  * loop and trimming the client buffer later. So we return
@@ -1966,8 +1972,12 @@ void processInputBuffer(client *c) {
         c->qb_pos = 0;
     }
 }
-
+/**
+ * 客户端发送请求处理方法
+ * @param conn
+ */
 void readQueryFromClient(connection *conn) {
+    //解析data
     client *c = connGetPrivateData(conn);
     int nread, readlen;
     size_t qblen;
@@ -1987,6 +1997,7 @@ void readQueryFromClient(connection *conn) {
      * at the risk of requiring more read(2) calls. This way the function
      * processMultiBulkBuffer() can avoid copying buffers to create the
      * Redis Object representing the argument. */
+    //请求类型
     if (c->reqtype == PROTO_REQ_MULTIBULK && c->multibulklen && c->bulklen != -1
         && c->bulklen >= PROTO_MBULK_BIG_ARG)
     {
@@ -2038,7 +2049,7 @@ void readQueryFromClient(connection *conn) {
 
     /* There is more data in the client input buffer, continue parsing it
      * in case to check if there is a full command to execute. */
-    //处理请求
+    //处理请求的buffer
      processInputBuffer(c);
 }
 

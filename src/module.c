@@ -6565,11 +6565,18 @@ int RM_UnregisterCommandFilter(RedisModuleCtx *ctx, RedisModuleCommandFilter *fi
     return REDISMODULE_OK;
 }
 
+
+/**
+ * 模块化开发
+ * https://redis.io/topics/modules-intro
+ * @param c
+ */
 void moduleCallCommandFilters(client *c) {
     if (listLength(moduleCommandFilters) == 0) return;
 
     listIter li;
     listNode *ln;
+    //模块
     listRewind(moduleCommandFilters,&li);
 
     RedisModuleCommandFilterCtx filter = {
@@ -6577,6 +6584,7 @@ void moduleCallCommandFilters(client *c) {
         .argc = c->argc
     };
 
+    //遍历模块
     while((ln = listNext(&li))) {
         RedisModuleCommandFilter *f = ln->value;
 
@@ -6586,6 +6594,7 @@ void moduleCallCommandFilters(client *c) {
         if ((f->flags & REDISMODULE_CMDFILTER_NOSELF) && f->module->in_call) continue;
 
         /* Call filter */
+        //回调
         f->callback(&filter);
     }
 

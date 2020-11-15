@@ -44,7 +44,8 @@ void hashTypeTryConversion(robj *o, robj **argv, int start, int end) {
 
     for (i = start; i <= end; i++) {
         if (sdsEncodedObject(argv[i]) &&
-            sdslen(argv[i]->ptr) > server.hash_max_ziplist_value)
+        //判断长度是否超长
+                sdslen(argv[i]->ptr) > server.hash_max_ziplist_value)
         {
             hashTypeConvert(o, OBJ_ENCODING_HT);
             break;
@@ -234,6 +235,7 @@ int hashTypeSet(robj *o, sds field, sds value, int flags) {
         o->ptr = zl;
 
         /* Check if the ziplist needs to be converted to a hash table */
+        //如果超过了ziplist的entry数量限制
         if (hashTypeLength(o) > server.hash_max_ziplist_entries)
             hashTypeConvert(o, OBJ_ENCODING_HT);
     } else if (o->encoding == OBJ_ENCODING_HT) {
@@ -452,6 +454,7 @@ robj *hashTypeLookupWriteOrCreate(client *c, robj *key) {
     robj *o = lookupKeyWrite(c->db,key);
     if (o == NULL) {
         o = createHashObject();
+        //记录到db记录了
         dbAdd(c->db,key,o);
     } else {
         if (o->type != OBJ_HASH) {
@@ -536,7 +539,9 @@ void hsetCommand(client *c) {
         return;
     }
 
+    //查找或者构建一个ziplist
     if ((o = hashTypeLookupWriteOrCreate(c,c->argv[1])) == NULL) return;
+    //尝试类型转换
     hashTypeTryConversion(o,c->argv,2,c->argc-1);
 
     for (i = 2; i < c->argc; i += 2)

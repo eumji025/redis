@@ -77,6 +77,7 @@ typedef struct dict {
     dictType *type;
     void *privdata;
     dictht ht[2];
+    //扩容的位置
     long rehashidx; /* rehashing not in progress if rehashidx == -1 */
     unsigned long iterators; /* number of iterators currently running */
 } dict;
